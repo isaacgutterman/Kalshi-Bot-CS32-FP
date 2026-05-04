@@ -56,4 +56,4 @@ Optional:
 Notes:
 - `--mode stream` only prints signals and never opens positions; use `--mode paper` for simulated trade execution.
 
-
+Credit Cursor for the project structure, code cleanup, and helping with this README.
