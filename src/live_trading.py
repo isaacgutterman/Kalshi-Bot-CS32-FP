@@ -69,6 +69,7 @@ def run_paper(args: argparse.Namespace) -> None:
     create_algorithm(algo_key, params)
     algos: Dict[str, TradingAlgorithm] = {t: create_algorithm(algo_key, params) for t in tickers}
     books: Dict[str, PaperPosition] = {ticker: PaperPosition() for ticker in tickers}
+    initial_purchase_made: Dict[str, bool] = {ticker: False for ticker in tickers}
     iteration = 0
 
     print(f"Paper trading {len(tickers)} markets: {', '.join(tickers)}")
@@ -84,9 +85,27 @@ def run_paper(args: argparse.Namespace) -> None:
                 print(f"  {snap.ticker:22s} mid=NA signal=HOLD pos={books[snap.ticker].qty_yes:+d}")
                 continue
             signal = algos[snap.ticker].on_price(snap.mid)
-            stat_signal = _stat_arb_signal_for_snapshot(snap.ticker, snap.mid, stat_arb_teams, fair_probs, args.stat_arb_edge_cents)
-            if stat_signal is not None:
-                signal = stat_signal
+            used_forced_entry = False
+
+            # Ensure each market starts with one odds-based entry, then continue normal monitoring/trading.
+            if not initial_purchase_made[snap.ticker]:
+                entry_signal = _forced_initial_odds_signal(
+                    snap.ticker,
+                    snap.mid,
+                    stat_arb_teams,
+                    fair_probs,
+                )
+                if entry_signal is not None:
+                    signal = entry_signal
+                    initial_purchase_made[snap.ticker] = True
+                    used_forced_entry = True
+
+            if not used_forced_entry:
+                stat_signal = _stat_arb_signal_for_snapshot(
+                    snap.ticker, snap.mid, stat_arb_teams, fair_probs, args.stat_arb_edge_cents
+                )
+                if stat_signal is not None:
+                    signal = stat_signal
             if signal != "HOLD":
                 books[snap.ticker].apply_signal(signal, snap.mid, args.unit_size)
             unrealized = books[snap.ticker].mark_to_market(snap.mid)
@@ -199,6 +218,25 @@ def _stat_arb_signal_for_snapshot(
     if mispricing <= -edge_cents:
         return "BUY_NO"
     return "HOLD"
+
+
+def _forced_initial_odds_signal(
+    ticker: str,
+    kalshi_mid: float,
+    ticker_to_yes_team: Dict[str, str],
+    fair_probs: Optional[Dict[str, float]],
+) -> str:
+    if not fair_probs:
+        # Fallback to market-implied odds so we always make one initial purchase.
+        return "BUY_YES" if kalshi_mid >= 50.0 else "BUY_NO"
+    yes_team = ticker_to_yes_team.get(ticker)
+    if not yes_team:
+        return "BUY_YES" if kalshi_mid >= 50.0 else "BUY_NO"
+    fair_prob = fair_probs.get(yes_team)
+    if fair_prob is None:
+        return "BUY_YES" if kalshi_mid >= 50.0 else "BUY_NO"
+    fair_yes_cents = fair_prob * 100.0
+    return "BUY_YES" if fair_yes_cents >= kalshi_mid else "BUY_NO"
 
 
 def build_parser() -> argparse.ArgumentParser:
