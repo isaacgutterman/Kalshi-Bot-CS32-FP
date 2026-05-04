@@ -7,12 +7,14 @@ A trading bot for [Kalshi](https://kalshi.com) focused on baseball game markets.
 - Discovers baseball win/loss style markets (not props/totals).
 - Streams live quotes and prints signals for the algorithm you pick.
 - Runs live paper trading (simulated positions and PnL).
+- Optional stat-arb override using moneyline fair value from [The Odds API](https://the-odds-api.com/#get-access) (pick a bookmaker, e.g. DraftKings or FanDuel, via `--odds-bookmaker`).
 - Runs backtests over the last month using market trades.
-- Code is split across four scripts:
+- Code is split across five scripts:
   - `src/api_client.py` (Kalshi API + market discovery/filtering)
   - `src/algorithm.py` (registry of strategies + paper position math)
   - `src/backtesting.py` (historical replay + PnL evaluation)
   - `src/live_trading.py` (live stream + live paper trading)
+  - `src/odds_client.py` (The Odds API client + implied probability normalization)
 
 ## Setup
 
@@ -36,6 +38,10 @@ Run `backtesting.py` or `live_trading.py` without `--algo` in a normal terminal 
   - `python src/live_trading.py --mode stream --max-markets 5 --interval-seconds 10 --algo momentum`
 - Live paper trading:
   - `python src/live_trading.py --mode paper --max-markets 5 --interval-seconds 10 --unit-size 1 --algo mean_reversion`
+- Live paper with stat-arb from The Odds API (example: DraftKings lines in their feed):
+  - `python src/live_trading.py --mode paper --algo momentum --external-odds-provider the_odds_api --odds-bookmaker draftkings --stat-arb-edge-cents 3`
+- Same with another US bookmaker in the feed (see their bookmaker list):
+  - `python src/live_trading.py --mode paper --algo momentum --external-odds-provider the_odds_api --odds-bookmaker fanduel --stat-arb-edge-cents 3`
 - Last-month backtest:
   - `python src/backtesting.py --max-markets 8 --backtest-days 30 --algo rsi`
 
@@ -43,6 +49,11 @@ Optional:
 - Force specific markets:
   - `--tickers "TICKER1,TICKER2"`
 - Tune signal sensitivity:
-  - `--lookback-samples 12 --threshold-cents 1.5`
+  - `--lookback-samples 8 --threshold-cents 0.9`
+- The Odds API stat-arb requirements:
+  - Subscribe at [Get access](https://the-odds-api.com/#get-access), set `ODDS_API_KEY` (or `--odds-api-key`), and use `--external-odds-provider the_odds_api`. The legacy value `draftkings` still works and means the same provider.
+
+Notes:
+- `--mode stream` only prints signals and never opens positions; use `--mode paper` for simulated trade execution.
 
 

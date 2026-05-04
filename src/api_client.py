@@ -139,10 +139,27 @@ def parse_trade_time(trade: dict) -> Optional[dt.datetime]:
         return None
 
 
+def _ticker_is_multivariate_bundle(ticker: str) -> bool:
+    """Kalshi multigame / cross-category / parlay-style tickers (not single-game MLB lines)."""
+    t = ticker.upper()
+    return any(
+        needle in t
+        for needle in (
+            "MULTIGAME",
+            "CROSSCATEGORY",
+            "KXMVECROSS",
+            "MVESPORTSMULTI",
+            "MULTIEXTENDED",
+        )
+    )
+
+
 def is_baseball_win_loss_market(market: dict) -> bool:
     title = f"{market.get('title', '')} {market.get('subtitle', '')}".lower()
     ticker = str(market.get("ticker", "")).lower()
     event = str(market.get("event_ticker", "")).lower()
+    if _ticker_is_multivariate_bundle(str(market.get("ticker", ""))):
+        return False
 
     mlb_teams = (
         "yankees", "mets", "red sox", "blue jays", "orioles", "rays", "guardians", "tigers", "royals", "twins",
@@ -153,7 +170,7 @@ def is_baseball_win_loss_market(market: dict) -> bool:
     )
     baseball_signal = any(
         token in title or token in ticker or token in event for token in ("mlb", "baseball", "runs scored", "home run")
-    ) or any(team in title for team in mlb_teams)
+    ) or any(team in title for team in mlb_teams) or "pro baseball" in title
     if not baseball_signal:
         return False
 
@@ -165,7 +182,13 @@ def is_baseball_win_loss_market(market: dict) -> bool:
         return False
 
     ticker_upper = ticker.upper()
-    is_game_winner = "wins" in title or "game" in ticker_upper
+    padded = f" {title} "
+    is_game_winner = (
+        "wins" in title
+        or "game" in ticker_upper
+        or " win " in padded
+        or ("win" in title and "beat" in title)
+    )
     is_prop_code = any(code in ticker_upper for code in ("RFI", "TB-", "HR-", "SPREAD"))
     return is_game_winner and not is_prop_code
 
@@ -173,6 +196,8 @@ def is_baseball_win_loss_market(market: dict) -> bool:
 def is_baseball_market_broad(market: dict) -> bool:
     title = f"{market.get('title', '')} {market.get('subtitle', '')}".lower()
     ticker = str(market.get("ticker", "")).upper()
+    if _ticker_is_multivariate_bundle(ticker):
+        return False
     team_tokens = (
         "new york y", "new york m", "los angeles d", "los angeles a", "san diego", "kansas city", "boston",
         "baltimore", "seattle", "philadelphia", "houston", "st. louis", "miami", "tampa bay", "pittsburgh",
@@ -183,8 +208,22 @@ def is_baseball_market_broad(market: dict) -> bool:
 
 def discover_baseball_winloss_markets(client: KalshiPublicClient, max_markets: int, include_settled: bool) -> List[str]:
     statuses = ["open"] if not include_settled else ["open", "closed", "settled"]
+    series_candidates: List[str] = []
     strict_candidates: List[str] = []
     broad_candidates: List[str] = []
+
+    for status in statuses:
+        try:
+            series_markets = client.get_markets(limit=500, status=status, series_ticker="KXMLB")
+        except (requests.RequestException, OSError, ValueError):
+            series_markets = []
+        for market in series_markets:
+            t = str(market.get("ticker", ""))
+            if not t or _ticker_is_multivariate_bundle(t):
+                continue
+            series_candidates.append(t)
+            if len(series_candidates) >= max_markets * 40:
+                break
 
     for status in statuses:
         markets = client.get_markets(limit=1000, status=status)
@@ -202,13 +241,15 @@ def discover_baseball_winloss_markets(client: KalshiPublicClient, max_markets: i
         if len(strict_candidates) >= max_markets * 12:
             break
 
-    combined = strict_candidates if strict_candidates else broad_candidates
-    return list(dict.fromkeys(combined))
+    tail = strict_candidates if strict_candidates else broad_candidates
+    return list(dict.fromkeys(series_candidates + tail))
 
 
 def pick_tradable_markets(client: KalshiPublicClient, candidates: List[str], max_markets: int) -> List[str]:
     picked: List[str] = []
     for ticker in candidates:
+        if _ticker_is_multivariate_bundle(ticker):
+            continue
         market = client.get_market(ticker)
         orderbook = client.get_orderbook(ticker)
         yes_bid, no_bid = best_bids(orderbook)
